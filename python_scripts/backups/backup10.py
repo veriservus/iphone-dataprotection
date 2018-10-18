@@ -147,6 +147,11 @@ class ManifestDB(object):
         f_out.close()
 
     def extract_backup(self, output_path):
+        for filename, mbfile in self.files.iteritems():
+            if mbfile.is_regular_file() or mbfile.is_symbolic_link():
+                self.extract_file(filename, mbfile, output_path)
+
+    def _extract_backup(self, output_path):
         for mbfile in self.files.itervalues():
             if mbfile.is_directory():
                 record_path = re.sub(r'[:|*<>?"]', "_", mbfile.relative_path)
@@ -157,6 +162,58 @@ class ManifestDB(object):
         for filename, mbfile in self.files.iteritems():
             if mbfile.is_regular_file() or mbfile.is_symbolic_link():
                 self._extract_file(filename, mbfile, output_path)
+
+    def extract_file(self, filename, record, output_path):
+        try:
+            f1 = file(os.path.join(self.backup_path, filename[:2], filename), 'rb')
+
+        except:
+            warn("File %s (%s) has not been found" % (os.path.join(filename[:2], filename), record.relative_path))
+            return
+
+        # write output file
+        output_dir = os.path.join(output_path, filename[:2])
+        output_path = os.path.join(output_dir, filename)
+
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        print("Writing %s" % output_path)
+
+        try:
+            f2 = file(output_path, 'wb')
+
+        except:
+            warn("File %s could not be created (path too long?)" % output_path)
+            return
+
+        aes = None
+
+        if record.encryption_key is not None and self.keybag:  # file is encrypted!
+            key = self.keybag.unwrapKeyForClass(record.protection_class, record.encryption_key[4:])
+            if not key:
+                warn("Cannot unwrap key for {0}".format(output_path))
+                return
+            aes = AES.new(key, AES.MODE_CBC, "\x00" * 16)
+
+        while True:
+            data = f1.read(8192)
+            if not data:
+                break
+            if aes:
+                data2 = data = aes.decrypt(data)
+            f2.write(data)
+
+        f1.close()
+        if aes:
+            c = data2[-1]
+            i = ord(c)
+            if i < 17 and data2.endswith(c * i):
+                f2.truncate(f2.tell() - i)
+            else:
+                warn("Bad padding, last byte = 0x%x !" % i)
+
+        f2.close()
 
     def _extract_file(self, filename, record, output_path):
          # adjust output file name
